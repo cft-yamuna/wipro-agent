@@ -1,0 +1,31 @@
+{
+  "name": "lightman-agent",
+  "version": "1.0.0",
+  "description": "LIGHTMAN Agent - System-level daemon for museum display machines",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "sync-display": "node -e \"const{cpSync,rmSync,mkdirSync}=require('fs');rmSync('public',{recursive:true,force:true});mkdirSync('public',{recursive:true});cpSync('../display/dist','public',{recursive:true});console.log('Display synced to agent/public/')\"",
+    "build": "npm run sync-display && tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "systeminformation": "^5.23.0",
+    "ws": "^8.18.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^3.1.1"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
