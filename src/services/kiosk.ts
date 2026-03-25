@@ -171,18 +171,23 @@ export class KioskManager {
   // =====================================================================
 
   private async shellLaunch(targetUrl: string): Promise<KioskStatus> {
+    const previousUrl = this.readUrlSidecar();
     this.writeUrlSidecar(targetUrl);
     this.currentUrl = targetUrl;
 
-    // Check if Chrome is already running (shell may have already launched it)
+    // In shell mode, Chrome is managed by the shell BAT (lightman-shell.bat).
+    // We NEVER kill Chrome on agent startup — only when the URL actually changes
+    // via an explicit navigate() call. This prevents blinking on agent restart.
     if (this.isChromeRunning()) {
-      this.logger.info(`Shell mode: Chrome already running, URL sidecar updated to ${targetUrl}`);
-      // If we need to change URL, kill Chrome so shell relaunches with new URL
-      const currentSidecar = this.readUrlSidecar();
-      if (currentSidecar !== targetUrl) {
-        this.writeUrlSidecar(targetUrl);
+      // Compare base URLs without query params (credentials change on every restart)
+      const prevBase = previousUrl ? previousUrl.split('?')[0] : '';
+      const targetBase = targetUrl.split('?')[0];
+      if (prevBase && prevBase !== targetBase) {
+        // URL path actually changed (not just credential refresh) — restart Chrome
         this.killAllChrome();
-        this.logger.info('Shell mode: killed Chrome for URL change, shell will relaunch');
+        this.logger.info(`Shell mode: URL changed (${prevBase} -> ${targetBase}), killed Chrome for relaunch`);
+      } else {
+        this.logger.info(`Shell mode: Chrome already running, sidecar updated. No restart needed.`);
       }
     } else {
       this.logger.info(`Shell mode: Chrome not running, URL sidecar written. Shell will launch it.`);

@@ -93,9 +93,10 @@ $Config = $Template `
 
 # 6. Inject shellMode into kiosk config if requested
 if ($ShellMode) {
-    # Add "shellMode": true to the kiosk section
-    $Config = $Config -replace '"crashWindowMs":\s*\d+', '"crashWindowMs": 300000,
-    "shellMode": true'
+    # Parse as object, set shellMode, re-serialize (reliable, no regex fragility)
+    $configObj = $Config | ConvertFrom-Json
+    $configObj.kiosk | Add-Member -NotePropertyName "shellMode" -NotePropertyValue $true -Force
+    $Config = $configObj | ConvertTo-Json -Depth 4
     Write-Host "[OK] Shell replacement mode enabled in config" -ForegroundColor Magenta
 }
 

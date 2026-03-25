@@ -1,68 +1,54 @@
 # LIGHTMAN Agent - Windows Uninstaller
-# Run as Administrator: powershell -ExecutionPolicy Bypass -File uninstall-windows.ps1
+# Removes everything: service, tasks, processes, files, shell.
 #Requires -RunAsAdministrator
 
-$ErrorActionPreference = "Stop"
-
-$InstallDir = "C:\Program Files\Lightman\Agent"
-$LogDir = "C:\ProgramData\Lightman\logs"
+$ErrorActionPreference = "Continue"
+$NssmExe = "C:\ProgramData\Lightman\nssm\nssm.exe"
 $ServiceName = "LightmanAgent"
 
-Write-Host "=== LIGHTMAN Agent - Windows Uninstaller ===" -ForegroundColor Cyan
 Write-Host ""
+Write-Host "=== LIGHTMAN Agent - Uninstaller ===" -ForegroundColor Cyan
 
-# --- Stop service ---
-Write-Host "[1/4] Stopping service..." -ForegroundColor Yellow
-$svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-if ($svc) {
-    if ($svc.Status -eq 'Running') {
-        Stop-Service -Name $ServiceName -Force
-        Write-Host "  Service stopped"
-    }
+# 1. Service
+Write-Host "[1/6] Removing service..." -ForegroundColor Yellow
+if (Test-Path $NssmExe) { & $NssmExe stop $ServiceName 2>$null; & $NssmExe remove $ServiceName confirm 2>$null }
+foreach ($sn in @($ServiceName,"lightmanagent.exe")) { sc.exe stop $sn 2>$null; sc.exe delete $sn 2>$null }
+$s = Get-Service -DisplayName "LIGHTMAN*" -ErrorAction SilentlyContinue
+if ($s) { Stop-Service $s.Name -Force -ErrorAction SilentlyContinue; sc.exe delete $s.Name 2>$null }
+
+# 2. Tasks
+Write-Host "[2/6] Removing tasks..." -ForegroundColor Yellow
+foreach ($tn in @("LIGHTMAN Agent","LIGHTMAN Kiosk Browser","LIGHTMAN Guardian")) {
+    $t = Get-ScheduledTask -TaskName $tn -ErrorAction SilentlyContinue
+    if ($t) { Stop-ScheduledTask -TaskName $tn -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue }
 }
 
-# --- Uninstall Windows service ---
-Write-Host "[2/4] Removing Windows service..." -ForegroundColor Yellow
-if (Test-Path "$InstallDir\dist\lib\winService.js") {
-    Push-Location $InstallDir
-    try {
-        node -e "import('./dist/lib/winService.js').then(m => m.uninstallService()).then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); })"
-    } catch {
-        Write-Host "  Warning: Service removal via node-windows failed, trying sc.exe..." -ForegroundColor Yellow
-        sc.exe delete $ServiceName 2>$null
-    }
-    Pop-Location
-} else {
-    sc.exe delete $ServiceName 2>$null
+# 3. Processes
+Write-Host "[3/6] Killing processes..." -ForegroundColor Yellow
+Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process -Name "chrome" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
+# 4. Firewall
+Write-Host "[4/6] Removing firewall rule..." -ForegroundColor Yellow
+Remove-NetFirewallRule -DisplayName "LIGHTMAN Agent WebSocket" -ErrorAction SilentlyContinue
+
+# 5. Shell
+Write-Host "[5/6] Restoring shell..." -ForegroundColor Yellow
+$HKLMPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+$shell = (Get-ItemProperty -Path $HKLMPath -Name "Shell" -ErrorAction SilentlyContinue).Shell
+if ($shell -and $shell -like "*lightman*") {
+    $orig = (Get-ItemProperty -Path $HKLMPath -Name "Shell_Original" -ErrorAction SilentlyContinue).Shell_Original
+    Set-ItemProperty -Path $HKLMPath -Name "Shell" -Value $(if ($orig) { $orig } else { "explorer.exe" })
+    Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "Shell" -ErrorAction SilentlyContinue
+    Write-Host "  Shell restored"
 }
 
-# --- Remove firewall rule ---
-Write-Host "[3/4] Removing firewall rule..." -ForegroundColor Yellow
-$ruleName = "LIGHTMAN Agent WebSocket"
-Remove-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
-Write-Host "  Firewall rule removed"
-
-# --- Remove directories ---
-Write-Host "[4/4] Removing files..." -ForegroundColor Yellow
-if (Test-Path $InstallDir) {
-    Remove-Item -Path $InstallDir -Recurse -Force
-    Write-Host "  Removed $InstallDir"
-}
-
-$removeLogsChoice = Read-Host "Remove log directory ($LogDir)? [y/N]"
-if ($removeLogsChoice -eq 'y' -or $removeLogsChoice -eq 'Y') {
-    if (Test-Path $LogDir) {
-        Remove-Item -Path $LogDir -Recurse -Force
-        Write-Host "  Removed $LogDir"
-    }
-}
-
-# Remove parent Lightman directory if empty
-$parentDir = "C:\Program Files\Lightman"
-if ((Test-Path $parentDir) -and ((Get-ChildItem $parentDir | Measure-Object).Count -eq 0)) {
-    Remove-Item -Path $parentDir -Force
-}
+# 6. Files
+Write-Host "[6/6] Removing files..." -ForegroundColor Yellow
+Remove-Item "C:\Program Files\Lightman" -Recurse -Force -ErrorAction SilentlyContinue
+$choice = Read-Host "Remove all data (logs, chrome cache, nssm)? [y/N]"
+if ($choice -eq 'y') { Remove-Item "C:\ProgramData\Lightman" -Recurse -Force -ErrorAction SilentlyContinue }
 
 Write-Host ""
-Write-Host "=== Uninstallation Complete ===" -ForegroundColor Green
+Write-Host "=== Done. Reboot: Restart-Computer ===" -ForegroundColor Green
 Write-Host ""

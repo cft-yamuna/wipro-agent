@@ -66,16 +66,29 @@ async function main(): Promise<void> {
   }
 
   // 2. Provision (get identity)
+  // Provision with retry — never crash, just keep trying.
+  // This prevents NSSM restart loops that kill Chrome (blinking screen).
   let identity;
-  try {
-    const result = await provision(config, logger);
-    identity = result.identity;
-    logger.info(
-      `Device ID: ${identity.deviceId} (${result.fromCache ? 'cached' : 'new'})`
-    );
-  } catch (err) {
-    logger.error('Provisioning failed:', err);
-    process.exit(1);
+  const MAX_PROVISION_ATTEMPTS = 999;
+  for (let attempt = 1; attempt <= MAX_PROVISION_ATTEMPTS; attempt++) {
+    try {
+      const result = await provision(config, logger);
+      identity = result.identity;
+      logger.info(
+        `Device ID: ${identity.deviceId} (${result.fromCache ? 'cached' : 'new'})`
+      );
+      break;
+    } catch (err) {
+      logger.error(`Provisioning attempt ${attempt} failed:`, err);
+      if (attempt < MAX_PROVISION_ATTEMPTS) {
+        const waitSec = Math.min(30, attempt * 5);
+        logger.info(`Retrying provisioning in ${waitSec}s...`);
+        await new Promise((r) => setTimeout(r, waitSec * 1000));
+      } else {
+        logger.error('All provisioning attempts exhausted. Exiting.');
+        process.exit(1);
+      }
+    }
   }
 
   // 3. Create WebSocket client
