@@ -244,7 +244,7 @@ $svcCheck.Refresh()
 if ($svcCheck.Status -eq 'Running') {
     Write-Host "  Service is RUNNING" -ForegroundColor Green
 } else {
-    Write-Host "  Service status: $($svcCheck.Status) — check $LogDir" -ForegroundColor Yellow
+    Write-Host "  Service status: $($svcCheck.Status) - check $LogDir" -ForegroundColor Yellow
     Start-Sleep -Seconds 3
     Start-Service -Name $svcCheck.Name -ErrorAction SilentlyContinue
 }
@@ -398,7 +398,7 @@ Write-Host "  Done"
 if ($ShellReplace) {
     Write-Host "[17/19] SHELL REPLACEMENT..." -ForegroundColor Magenta
 
-    # Copy shell BAT (reads slug from agent.config.json — single source of truth)
+    # Copy shell BAT (reads slug from agent.config.json - single source of truth)
     $shellSource = Join-Path $ScriptDir "lightman-shell.bat"
     $shellTarget = Join-Path $InstallDir "lightman-shell.bat"
     if (Test-Path $shellSource) { Copy-Item $shellSource $shellTarget -Force }
