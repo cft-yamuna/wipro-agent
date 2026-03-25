@@ -168,25 +168,54 @@ Write-Host "  $jsonCheck"
 # --- 9. Download NSSM ---
 Write-Host "[9/19] Setting up NSSM..." -ForegroundColor Yellow
 if (-not (Test-Path $NssmExe)) {
-    Write-Host "  Downloading NSSM..."
-    $nssmZip = "$env:TEMP\nssm.zip"
-    $downloaded = $false
-    try {
-        Invoke-WebRequest -Uri "https://nssm.cc/release/nssm-2.24.zip" -OutFile $nssmZip -UseBasicParsing -TimeoutSec 30
-        $downloaded = $true
-    } catch {
-        # Try bundled copy
-        $bundled = Join-Path $AgentDir "nssm\nssm.exe"
-        if (Test-Path $bundled) { Copy-Item $bundled $NssmExe -Force; Write-Host "  Using bundled NSSM" }
-    }
-    if ($downloaded -and (Test-Path $nssmZip)) {
-        Expand-Archive -Path $nssmZip -DestinationPath "$env:TEMP\nssm-extract" -Force
-        Copy-Item "$env:TEMP\nssm-extract\nssm-2.24\win64\nssm.exe" $NssmExe -Force
-        Remove-Item $nssmZip -Force -ErrorAction SilentlyContinue
-        Remove-Item "$env:TEMP\nssm-extract" -Recurse -Force -ErrorAction SilentlyContinue
+    # Check bundled copy first (fastest, no internet needed)
+    $bundled = Join-Path $AgentDir "nssm\nssm.exe"
+    if (Test-Path $bundled) {
+        Copy-Item $bundled $NssmExe -Force
+        Write-Host "  Using bundled NSSM"
+    } else {
+        # Download from multiple sources
+        $nssmZip = "$env:TEMP\nssm.zip"
+        $downloaded = $false
+        $urls = @(
+            "https://nssm.cc/release/nssm-2.24.zip",
+            "https://nssm.cc/ci/nssm-2.24-101-g897c7ad.zip"
+        )
+        foreach ($url in $urls) {
+            if ($downloaded) { break }
+            Write-Host "  Downloading from $url ..."
+            try {
+                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                Invoke-WebRequest -Uri $url -OutFile $nssmZip -UseBasicParsing -TimeoutSec 60
+                if ((Test-Path $nssmZip) -and (Get-Item $nssmZip).Length -gt 10000) {
+                    $downloaded = $true
+                }
+            } catch {
+                Write-Host "  Failed: $_" -ForegroundColor DarkYellow
+            }
+        }
+        if ($downloaded) {
+            Expand-Archive -Path $nssmZip -DestinationPath "$env:TEMP\nssm-extract" -Force
+            # Find nssm.exe in extracted folder (handles different zip structures)
+            $found = Get-ChildItem "$env:TEMP\nssm-extract" -Recurse -Filter "nssm.exe" | Where-Object { $_.DirectoryName -like "*win64*" } | Select-Object -First 1
+            if (-not $found) { $found = Get-ChildItem "$env:TEMP\nssm-extract" -Recurse -Filter "nssm.exe" | Select-Object -First 1 }
+            if ($found) { Copy-Item $found.FullName $NssmExe -Force }
+            Remove-Item $nssmZip -Force -ErrorAction SilentlyContinue
+            Remove-Item "$env:TEMP\nssm-extract" -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }
-if (-not (Test-Path $NssmExe)) { Write-Host "  FATAL: NSSM not available! Download from https://nssm.cc" -ForegroundColor Red; exit 1 }
+if (-not (Test-Path $NssmExe)) {
+    Write-Host ""
+    Write-Host "  NSSM download failed. Manual fix:" -ForegroundColor Red
+    Write-Host "  1. Download nssm-2.24.zip from https://nssm.cc/release/nssm-2.24.zip" -ForegroundColor Yellow
+    Write-Host "  2. Extract win64\nssm.exe to: $NssmExe" -ForegroundColor Yellow
+    Write-Host "  3. Re-run this script" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  OR bundle it in the repo:" -ForegroundColor Yellow
+    Write-Host "  Copy nssm.exe to: $AgentDir\nssm\nssm.exe" -ForegroundColor Yellow
+    exit 1
+}
 Write-Host "  NSSM ready: $NssmExe"
 
 # --- 10. Install Windows Service via NSSM ---
