@@ -414,11 +414,13 @@ if ($ShellReplace) {
     # ============================================================
     Write-Host "[16/21] SHELL REPLACEMENT: Replacing Windows desktop with Chrome kiosk..." -ForegroundColor Magenta
 
-    # Copy shell script to install dir
+    # Copy shell script to install dir, injecting the device slug into the default URL
     $shellSource = Join-Path $ScriptDir "lightman-shell.bat"
     $shellTarget = Join-Path $InstallDir "lightman-shell.bat"
     if (Test-Path $shellSource) {
-        Copy-Item -Path $shellSource -Destination $shellTarget -Force
+        $shellContent = Get-Content $shellSource -Raw
+        $shellContent = $shellContent -replace 'set DEFAULT_URL=http://localhost:3403/display$', "set DEFAULT_URL=http://localhost:3403/display/$Slug"
+        [System.IO.File]::WriteAllText($shellTarget, $shellContent, [System.Text.UTF8Encoding]::new($false))
     }
 
     # Replace the shell for THIS USER (not system-wide, so admin can still RDP with another account)

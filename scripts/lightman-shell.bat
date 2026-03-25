@@ -25,6 +25,14 @@ set CHROME_DATA=C:\ProgramData\Lightman\chrome-kiosk
 set LOG_FILE=C:\ProgramData\Lightman\logs\shell.log
 set DEFAULT_URL=http://localhost:3403/display
 
+REM Try to read the device slug from config to build a proper default URL
+if exist "%CONFIG_FILE%" (
+    for /f "delims=" %%a in ('node -e "try{const c=JSON.parse(require('fs').readFileSync(String.raw`%CONFIG_FILE%`,'utf8'));console.log(c.deviceSlug||'')}catch(e){console.log('')}" 2^>nul') do set DEVICE_SLUG=%%a
+)
+if not "%DEVICE_SLUG%"=="" (
+    set DEFAULT_URL=http://localhost:3403/display/%DEVICE_SLUG%
+)
+
 REM Ensure log directory exists
 if not exist "C:\ProgramData\Lightman\logs" mkdir "C:\ProgramData\Lightman\logs"
 
