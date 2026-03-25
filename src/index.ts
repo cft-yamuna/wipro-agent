@@ -68,7 +68,7 @@ async function main(): Promise<void> {
   // 2. Provision (get identity)
   // Provision with retry — never crash, just keep trying.
   // This prevents NSSM restart loops that kill Chrome (blinking screen).
-  let identity;
+  let identity: Identity | null = null;
   const MAX_PROVISION_ATTEMPTS = 999;
   for (let attempt = 1; attempt <= MAX_PROVISION_ATTEMPTS; attempt++) {
     try {
@@ -89,6 +89,11 @@ async function main(): Promise<void> {
         process.exit(1);
       }
     }
+  }
+
+  if (!identity) {
+    logger.error('Provisioning failed — no identity. Exiting.');
+    process.exit(1);
   }
 
   // 3. Create WebSocket client
