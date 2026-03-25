@@ -160,6 +160,12 @@ export class StaticServer {
       absPath = join(this.distPath, 'index.html');
     }
 
+    if (!existsSync(absPath)) {
+      res.writeHead(404);
+      res.end('Not Found');
+      return;
+    }
+
     const ext = extname(absPath).toLowerCase();
     const mime = MIME[ext] || 'application/octet-stream';
 

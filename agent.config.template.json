@@ -17,7 +17,8 @@
     ],
     "pollIntervalMs": 10000,
     "maxCrashesInWindow": 10,
-    "crashWindowMs": 300000
+    "crashWindowMs": 300000,
+    "shellMode": false
   },
   "powerSchedule": {
     "shutdownCron": "0 19 * * *",

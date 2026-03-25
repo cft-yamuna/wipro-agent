@@ -21,6 +21,9 @@ interface NodeWindowsModule {
     nodeOptions?: string[];
     workingDirectory?: string;
     env?: Array<{ name: string; value: string }>;
+    wait?: number;
+    grow?: number;
+    maxRetries?: number;
   }) => NodeWindowsService;
 }
 
@@ -48,6 +51,10 @@ export async function installService(): Promise<void> {
       env: [
         { name: 'NODE_ENV', value: 'production' },
       ],
+      // Crash recovery: restart with growing delay, no max restart limit
+      wait: 5,              // 5 seconds before first restart
+      grow: 0.5,            // grow delay by 50% each consecutive crash
+      maxRetries: -1,       // never stop restarting (-1 = infinite)
     });
 
     svc.on('install', () => {

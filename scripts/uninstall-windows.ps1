@@ -1,4 +1,4 @@
-# LIGHTMAN Agent — Windows Uninstaller
+# LIGHTMAN Agent - Windows Uninstaller
 # Run as Administrator: powershell -ExecutionPolicy Bypass -File uninstall-windows.ps1
 #Requires -RunAsAdministrator
 

@@ -1,4 +1,4 @@
-# LIGHTMAN Agent — Device Setup Script (Windows)
+# LIGHTMAN Agent - Device Setup Script (Windows)
 # Generates agent.config.json for this specific device.
 #
 # Usage (run from agent directory or scripts directory):
@@ -19,7 +19,10 @@ param(
     [string]$Timezone = "Asia/Kolkata",
 
     [Parameter(Mandatory=$false)]
-    [string]$InstallDir = $null
+    [string]$InstallDir = $null,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$ShellMode = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -32,14 +35,14 @@ if (-not $InstallDir) {
 }
 
 Write-Host ""
-Write-Host "=== LIGHTMAN Agent — Device Setup ===" -ForegroundColor Cyan
+Write-Host "=== LIGHTMAN Agent - Device Setup ===" -ForegroundColor Cyan
 Write-Host "  Slug:        $Slug"
 Write-Host "  Server:      $Server"
 Write-Host "  Install dir: $InstallDir"
 Write-Host "  Timezone:    $Timezone"
 Write-Host ""
 
-# ── 1. Clear cached identity (CRITICAL — prevents old device credentials leaking) ──
+# 1. Clear cached identity (CRITICAL - prevents old device credentials leaking)
 $IdentityFile = Join-Path $InstallDir ".lightman-identity.json"
 if (Test-Path $IdentityFile) {
     Remove-Item $IdentityFile -Force
@@ -48,24 +51,22 @@ if (Test-Path $IdentityFile) {
     Write-Host "[OK] No existing identity cache found (clean install)" -ForegroundColor DarkGray
 }
 
-# ── 2. Derive kiosk display URL from server URL ──
-# Server port is replaced with 3403 (display server)
-$KioskBase = $Server -replace ':\d+(/.*)?$', ':3403'
-$KioskUrl  = "$KioskBase/display/$Slug"
+# 2. Kiosk display URL - always localhost since agent runs the static server locally on port 3403
+$KioskUrl  = "http://localhost:3403/display/$Slug"
 
-# ── 3. Detect browser path ──
+# 3. Detect browser path
 $BrowserPath = "C:\Program Files\Google\Chrome\Application\chrome.exe"
 if (-not (Test-Path $BrowserPath)) {
     $BrowserPath = "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
 }
 if (-not (Test-Path $BrowserPath)) {
     $BrowserPath = "chromium-browser"
-    Write-Host "[WARN] Chrome not found — using 'chromium-browser'" -ForegroundColor Yellow
+    Write-Host "[WARN] Chrome not found - using 'chromium-browser'" -ForegroundColor Yellow
 }
 
 $ChromeDataDir = "C:\ProgramData\Lightman\chrome-kiosk"
 
-# ── 4. Read template ──
+# 4. Read template
 $TemplatePath = Join-Path $AgentDir "agent.config.template.json"
 if (-not (Test-Path $TemplatePath)) {
     # If running from install dir (post-install), template should have been copied there
@@ -78,7 +79,7 @@ if (-not (Test-Path $TemplatePath)) {
 
 $Template = Get-Content $TemplatePath -Raw
 
-# ── 5. Replace placeholders ──
+# 5. Replace placeholders
 $BrowserEscaped    = $BrowserPath  -replace '\\', '\\'
 $ChromeDirEscaped  = $ChromeDataDir -replace '\\', '\\'
 
@@ -90,9 +91,18 @@ $Config = $Template `
     -replace '__CHROME_DATA_DIR__', $ChromeDirEscaped `
     -replace 'Asia/Kolkata',      $Timezone
 
-# ── 6. Write config ──
+# 6. Inject shellMode into kiosk config if requested
+if ($ShellMode) {
+    # Add "shellMode": true to the kiosk section
+    $Config = $Config -replace '"crashWindowMs":\s*\d+', '"crashWindowMs": 300000,
+    "shellMode": true'
+    Write-Host "[OK] Shell replacement mode enabled in config" -ForegroundColor Magenta
+}
+
+# 7. Write config
 $ConfigPath = Join-Path $InstallDir "agent.config.json"
-Set-Content -Path $ConfigPath -Value $Config -Encoding UTF8
+# Write as UTF-8 WITHOUT BOM (BOM breaks JSON parsing in Node.js)
+[System.IO.File]::WriteAllText($ConfigPath, $Config, [System.Text.UTF8Encoding]::new($false))
 
 Write-Host "[OK] Created agent.config.json" -ForegroundColor Green
 Write-Host ""
@@ -100,6 +110,6 @@ Write-Host "  Device slug : $Slug"
 Write-Host "  Server      : $Server"
 Write-Host "  Kiosk URL   : $KioskUrl"
 Write-Host ""
-Write-Host "Setup complete. Start the agent — it will provision automatically." -ForegroundColor Cyan
+Write-Host "Setup complete. Start the agent - it will provision automatically." -ForegroundColor Cyan
 Write-Host "(If IP matches, provisioning is instant. Otherwise enter pairing code shown in admin.)" -ForegroundColor DarkGray
 Write-Host ""

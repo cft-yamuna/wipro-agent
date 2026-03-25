@@ -78,6 +78,9 @@ export interface KioskConfig {
   pollIntervalMs: number;
   maxCrashesInWindow: number;
   crashWindowMs: number;
+  /** Shell replacement mode: Chrome is launched by the Windows shell (lightman-shell.bat),
+   *  not by the agent. Agent only manages URL changes and monitors Chrome via process list. */
+  shellMode?: boolean;
 }
 
 // --- Kiosk Status ---

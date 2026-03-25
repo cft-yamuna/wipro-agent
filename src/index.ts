@@ -136,7 +136,9 @@ async function main(): Promise<void> {
     healthMonitor,
     logger,
     config.serverUrl,
-    identity
+    identity,
+    undefined,
+    config.kiosk?.shellMode
   );
   registerMaintenanceCommands(commandExecutor.register.bind(commandExecutor), watchdog, logger);
 
@@ -276,10 +278,19 @@ async function main(): Promise<void> {
 
       // Auto-launch kiosk browser if kiosk config is present
       if (config.kiosk) {
-        logger.info('Auto-launching kiosk browser...');
-        kioskManager.launch().catch((err) => {
-          logger.error('Failed to auto-launch kiosk:', err);
-        });
+        if (config.kiosk.shellMode) {
+          // Shell mode: Chrome is launched by the Windows shell (lightman-shell.bat).
+          // We just write the URL sidecar so the shell knows which URL to open.
+          logger.info('Shell mode: skipping Chrome launch (managed by Windows shell)');
+          kioskManager.launch().catch((err) => {
+            logger.error('Failed to update kiosk URL sidecar:', err);
+          });
+        } else {
+          logger.info('Auto-launching kiosk browser...');
+          kioskManager.launch().catch((err) => {
+            logger.error('Failed to auto-launch kiosk:', err);
+          });
+        }
       }
 
       // Fetch device config and auto-start serial bridge if com_port is configured

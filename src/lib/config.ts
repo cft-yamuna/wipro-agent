@@ -10,6 +10,7 @@ const kioskSchema = z.object({
   pollIntervalMs: z.number().int().min(1000).default(10_000),
   maxCrashesInWindow: z.number().int().min(1).default(10),
   crashWindowMs: z.number().int().min(10_000).default(300_000),
+  shellMode: z.boolean().default(false),
 });
 
 const screenshotSchema = z.object({

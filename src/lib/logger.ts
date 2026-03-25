@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync } from 'fs';
+import { appendFileSync, existsSync, mkdirSync, statSync, renameSync, unlinkSync } from 'fs';
 import { dirname } from 'path';
 import type { LogEntry } from './types.js';
 
@@ -18,10 +18,14 @@ const LEVEL_LABELS: Record<LogLevel, string> = {
   error: 'ERROR',
 };
 
+const MAX_LOG_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
+const MAX_ROTATED_FILES = 3; // Keep agent.log.1, .2, .3
+
 export class Logger {
   private level: LogLevel;
   private logFile: string | null;
   private listeners: Array<(entry: LogEntry) => void> = [];
+  private writesSinceRotateCheck = 0;
 
   constructor(level: LogLevel = 'info', logFile?: string) {
     this.level = level;
@@ -77,11 +81,18 @@ export class Logger {
       console.log(formatted, ...args);
     }
 
-    // File output
+    // File output (with rotation)
     if (this.logFile) {
       try {
         const extra = args.length > 0 ? ' ' + args.map(a => JSON.stringify(a)).join(' ') : '';
         appendFileSync(this.logFile, formatted + extra + '\n');
+
+        // Check rotation every 100 writes to avoid stat() on every log line
+        this.writesSinceRotateCheck++;
+        if (this.writesSinceRotateCheck >= 100) {
+          this.writesSinceRotateCheck = 0;
+          this.rotateIfNeeded();
+        }
       } catch {
         // Silently fail file writes to avoid recursive errors
       }
@@ -95,6 +106,32 @@ export class Logger {
       } catch {
         // Prevent listener errors from breaking logging
       }
+    }
+  }
+
+  private rotateIfNeeded(): void {
+    if (!this.logFile) return;
+    try {
+      const stat = statSync(this.logFile);
+      if (stat.size < MAX_LOG_SIZE_BYTES) return;
+
+      // Rotate: agent.log.3 → delete, agent.log.2 → .3, agent.log.1 → .2, agent.log → .1
+      for (let i = MAX_ROTATED_FILES; i >= 1; i--) {
+        const src = i === 1 ? this.logFile : `${this.logFile}.${i - 1}`;
+        const dst = `${this.logFile}.${i}`;
+        try {
+          if (i === MAX_ROTATED_FILES && existsSync(dst)) {
+            unlinkSync(dst);
+          }
+          if (existsSync(src)) {
+            renameSync(src, dst);
+          }
+        } catch {
+          // Best effort rotation
+        }
+      }
+    } catch {
+      // stat failed, skip rotation
     }
   }
 }

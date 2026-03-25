@@ -17,6 +17,11 @@ const DEFAULT_CONFIG: WatchdogConfig = {
   wsDisconnectedCooldownMs: 900_000,  // 15 min
 };
 
+const CHROME_CACHE_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000; // Once per day
+const CHROME_CACHE_DIR = process.platform === 'win32'
+  ? 'C:\\ProgramData\\Lightman\\chrome-kiosk\\Default\\Cache'
+  : '/tmp/lightman-chrome-cache';
+
 interface RecoveryStats {
   kioskRestarts: number;
   memoryRestarts: number;
@@ -30,6 +35,7 @@ export class Watchdog {
   private healthMonitor: HealthMonitor;
   private logger: Logger;
   private config: WatchdogConfig;
+  private shellMode: boolean;
   private timer: NodeJS.Timeout | null = null;
   private cooldowns: Map<string, number> = new Map();
   private stats: RecoveryStats = {
@@ -42,6 +48,7 @@ export class Watchdog {
   private shuttingDown = false;
   private serverUrl: string;
   private identity: { deviceId: string; apiKey: string };
+  private lastChromeCacheCleanup = 0;
 
   constructor(
     kioskManager: KioskManager,
@@ -50,7 +57,8 @@ export class Watchdog {
     logger: Logger,
     serverUrl: string,
     identity: { deviceId: string; apiKey: string },
-    config?: Partial<WatchdogConfig>
+    config?: Partial<WatchdogConfig>,
+    shellMode?: boolean
   ) {
     this.kioskManager = kioskManager;
     this.wsClient = wsClient;
@@ -59,6 +67,7 @@ export class Watchdog {
     this.serverUrl = serverUrl;
     this.identity = identity;
     this.config = { ...DEFAULT_CONFIG, ...config };
+    this.shellMode = shellMode ?? false;
   }
 
   start(): void {
@@ -176,9 +185,17 @@ export class Watchdog {
     }
 
     // Rule: Kiosk crash recovery
+    // In shell mode, the shell BAT handles Chrome restarts — we only monitor and report
     const kioskStatus = this.kioskManager.getStatus();
     if (!kioskStatus.running && !kioskStatus.crashLoopDetected) {
-      if (this.canAct('kiosk_crash', this.config.kioskCrashCooldownMs)) {
+      if (this.shellMode) {
+        // Shell mode: just report, don't try to launch (shell handles it)
+        if (this.canAct('kiosk_crash', this.config.kioskCrashCooldownMs)) {
+          this.logger.warn('Watchdog: Chrome not running (shell mode — shell should relaunch)');
+          this.setCooldown('kiosk_crash', this.config.kioskCrashCooldownMs);
+          this.sendCrashReport('kiosk', null, null).catch(() => {});
+        }
+      } else if (this.canAct('kiosk_crash', this.config.kioskCrashCooldownMs)) {
         this.logger.warn('Watchdog: kiosk not running, attempting restart');
         this.stats = { ...this.stats, kioskRestarts: this.stats.kioskRestarts + 1 };
         this.setCooldown('kiosk_crash', this.config.kioskCrashCooldownMs);
@@ -230,6 +247,41 @@ export class Watchdog {
         setTimeout(() => process.exit(0), 1000);
         return;
       }
+    }
+
+    // Rule: Daily Chrome cache cleanup (prevents disk fill over months)
+    if (now - this.lastChromeCacheCleanup > CHROME_CACHE_CLEANUP_INTERVAL_MS) {
+      this.lastChromeCacheCleanup = now;
+      this.cleanChromeCacheDir().catch(() => {});
+    }
+  }
+
+  private async cleanChromeCacheDir(): Promise<void> {
+    try {
+      const cacheDir = CHROME_CACHE_DIR;
+      const files = readdirSync(cacheDir);
+      const now = Date.now();
+      const maxAgeMs = 3 * 24 * 60 * 60 * 1000; // 3 days
+      let cleaned = 0;
+
+      for (const file of files) {
+        try {
+          const filePath = join(cacheDir, file);
+          const stat = statSync(filePath);
+          if (stat.isFile() && now - stat.mtimeMs > maxAgeMs) {
+            unlinkSync(filePath);
+            cleaned++;
+          }
+        } catch {
+          // Skip files we can't access
+        }
+      }
+
+      if (cleaned > 0) {
+        this.logger.info(`Chrome cache cleanup: removed ${cleaned} stale files`);
+      }
+    } catch {
+      // Cache dir may not exist yet, that's fine
     }
   }
 

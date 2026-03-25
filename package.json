@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "sync-display": "node -e \"const{cpSync,rmSync,mkdirSync}=require('fs');rmSync('public',{recursive:true,force:true});mkdirSync('public',{recursive:true});cpSync('../display/dist','public',{recursive:true});console.log('Display synced to agent/public/')\"",
-    "build": "npm run sync-display && tsc",
+    "build": "tsc",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
