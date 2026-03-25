@@ -432,8 +432,7 @@ if ($ShellReplace) {
     $shellTarget = Join-Path $InstallDir "lightman-shell.bat"
     if (Test-Path $shellSource) { Copy-Item $shellSource $shellTarget -Force }
 
-    # Write URL sidecar
-    [System.IO.File]::WriteAllText("C:\ProgramData\Lightman\kiosk-url.txt", "http://localhost:3403/display/$Slug", [System.Text.UTF8Encoding]::new($false))
+    # No sidecar file needed - shell BAT reads directly from agent.config.json
 
     # Replace shell
     $ShellReg = "HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon"

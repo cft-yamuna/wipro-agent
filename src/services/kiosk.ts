@@ -31,9 +31,8 @@ export class KioskManager {
     this.shellMode = config.shellMode ?? false;
 
     if (this.shellMode) {
-      this.logger.info('KioskManager: shell mode enabled — Chrome lifecycle managed by Windows shell');
-      // Write initial URL to sidecar so shell BAT can read it on first boot
-      this.writeUrlSidecar(config.defaultUrl);
+      this.logger.info('KioskManager: shell mode enabled - Chrome lifecycle managed by Windows shell');
+      // Shell BAT reads slug directly from agent.config.json - no sidecar needed
     }
   }
 
@@ -171,26 +170,15 @@ export class KioskManager {
   // =====================================================================
 
   private async shellLaunch(targetUrl: string): Promise<KioskStatus> {
-    const previousUrl = this.readUrlSidecar();
-    this.writeUrlSidecar(targetUrl);
     this.currentUrl = targetUrl;
 
-    // In shell mode, Chrome is managed by the shell BAT (lightman-shell.bat).
-    // We NEVER kill Chrome on agent startup — only when the URL actually changes
-    // via an explicit navigate() call. This prevents blinking on agent restart.
+    // Shell mode: Chrome is managed by lightman-shell.bat.
+    // Shell reads slug from agent.config.json directly.
+    // Agent NEVER kills Chrome on startup - only on explicit navigate().
     if (this.isChromeRunning()) {
-      // Compare base URLs without query params (credentials change on every restart)
-      const prevBase = previousUrl ? previousUrl.split('?')[0] : '';
-      const targetBase = targetUrl.split('?')[0];
-      if (prevBase && prevBase !== targetBase) {
-        // URL path actually changed (not just credential refresh) — restart Chrome
-        this.killAllChrome();
-        this.logger.info(`Shell mode: URL changed (${prevBase} -> ${targetBase}), killed Chrome for relaunch`);
-      } else {
-        this.logger.info(`Shell mode: Chrome already running, sidecar updated. No restart needed.`);
-      }
+      this.logger.info('Shell mode: Chrome already running. Not touching it.');
     } else {
-      this.logger.info(`Shell mode: Chrome not running, URL sidecar written. Shell will launch it.`);
+      this.logger.info('Shell mode: Chrome not running. Shell BAT will launch it.');
     }
 
     this.startedAt = this.startedAt || Date.now();
