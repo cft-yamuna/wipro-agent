@@ -317,25 +317,9 @@ async function main(): Promise<void> {
       });
       clearInterval(registerInterval);
 
-      // Auto-launch kiosk browser if kiosk config is present
-      if (config.kiosk) {
-        if (config.kiosk.shellMode) {
-          // Shell mode: Chrome is launched by the Windows shell (lightman-shell.bat).
-          // We just write the URL sidecar so the shell knows which URL to open.
-          logger.info('Shell mode: skipping Chrome launch (managed by Windows shell)');
-          kioskManager.launch().catch((err) => {
-            logger.error('Failed to update kiosk URL sidecar:', err);
-          });
-        } else {
-          logger.info('Auto-launching kiosk browser...');
-          kioskManager.launch().catch((err) => {
-            logger.error('Failed to auto-launch kiosk:', err);
-          });
-        }
-      }
-
-      // Fetch device config and auto-start serial bridge + multi-screen if configured
+      // Fetch device config first to decide single vs multi-screen kiosk
       fetchDeviceConfig(config.serverUrl, identity, logger).then((deviceCfg) => {
+        // Serial bridge
         if (deviceCfg && deviceCfg.comPort) {
           const comPort = deviceCfg.comPort;
           const controllerId = deviceCfg.controllerId || comPort;
@@ -347,15 +331,38 @@ async function main(): Promise<void> {
           logger.info('[SERIAL] No com_port configured on this device — serial bridge not started');
         }
 
-        // Auto-apply screenMap if present in device config
+        // Multi-screen: if screenMap exists, use MultiScreenKioskManager — do NOT launch single kiosk
         if (deviceCfg && deviceCfg.screenMap && deviceCfg.screenMap.length > 0) {
-          logger.info(`[MultiKiosk] Found screenMap in device config: ${deviceCfg.screenMap.length} mapping(s)`);
+          logger.info(`[MultiKiosk] Found screenMap in device config: ${deviceCfg.screenMap.length} mapping(s) — skipping single kiosk`);
           multiScreenKiosk.applyScreenMap(deviceCfg.screenMap, identity).catch((err) => {
             logger.error('[MultiKiosk] Failed to apply screenMap from config:', err);
           });
+          return;
+        }
+
+        // No screenMap — launch single-screen kiosk as before
+        if (config.kiosk) {
+          if (config.kiosk.shellMode) {
+            logger.info('Shell mode: skipping Chrome launch (managed by Windows shell)');
+            kioskManager.launch().catch((err) => {
+              logger.error('Failed to update kiosk URL sidecar:', err);
+            });
+          } else {
+            logger.info('Auto-launching single kiosk browser...');
+            kioskManager.launch().catch((err) => {
+              logger.error('Failed to auto-launch kiosk:', err);
+            });
+          }
         }
       }).catch((err) => {
-        logger.warn('[SERIAL] Could not fetch device config:', err);
+        logger.warn('Could not fetch device config:', err);
+        // Fallback: launch single kiosk if we can't reach server
+        if (config.kiosk && !config.kiosk.shellMode) {
+          logger.info('Fallback: launching single kiosk browser...');
+          kioskManager.launch().catch((e) => {
+            logger.error('Failed to auto-launch kiosk:', e);
+          });
+        }
       });
     }
   }, 1000);
