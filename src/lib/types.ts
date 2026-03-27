@@ -83,6 +83,18 @@ export interface KioskConfig {
   shellMode?: boolean;
 }
 
+// --- Multi-Screen Configuration ---
+
+/** Mapping of a physical screen to a URL (stored in device config, pushed from admin) */
+export interface ScreenMapping {
+  /** Hardware display ID, e.g. "\\\\.\\DISPLAY1" or "HDMI-1" */
+  hardwareId: string;
+  /** URL to open on this screen */
+  url: string;
+  /** Optional label for admin display */
+  label?: string;
+}
+
 // --- Kiosk Status ---
 export interface KioskStatus {
   running: boolean;
@@ -90,6 +102,19 @@ export interface KioskStatus {
   url: string | null;
   crashCount: number;
   crashLoopDetected: boolean;
+  uptimeMs: number | null;
+}
+
+/** Status for multi-screen kiosk */
+export interface MultiScreenKioskStatus {
+  screens: SingleScreenStatus[];
+}
+
+export interface SingleScreenStatus {
+  hardwareId: string;
+  url: string | null;
+  running: boolean;
+  pid: number | null;
   uptimeMs: number | null;
 }
 

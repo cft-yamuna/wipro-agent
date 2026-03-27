@@ -8,8 +8,10 @@ import { HealthMonitor } from './services/health.js';
 import { CommandExecutor } from './services/commands.js';
 import { KioskManager } from './services/kiosk.js';
 import { registerPowerCommands } from './commands/power.js';
-import { registerKioskCommands } from './commands/kiosk.js';
+import { registerKioskCommands, registerMultiScreenKioskCommands } from './commands/kiosk.js';
 import { registerScreenshotCommands } from './commands/screenshot.js';
+import { MultiScreenKioskManager } from './services/multiScreenKiosk.js';
+import { detectScreens } from './lib/screens.js';
 import { registerDisplayCommands } from './commands/display.js';
 import { registerNetworkCommands } from './commands/network.js';
 import { Updater } from './services/updater.js';
@@ -25,7 +27,7 @@ import { StaticServer } from './services/staticServer.js';
 import { PowerScheduler } from './services/powerScheduler.js';
 import { SerialBridge } from './services/serialBridge.js';
 import { LocalEventServer } from './services/localEvents.js';
-import type { WsMessage, KioskConfig, PowerScheduleConfig, Identity } from './lib/types.js';
+import type { WsMessage, KioskConfig, PowerScheduleConfig, Identity, ScreenMapping } from './lib/types.js';
 
 function getAgentVersion(): string {
   try {
@@ -105,7 +107,7 @@ async function main(): Promise<void> {
     identity,
     logger,
     onMessage: (msg: WsMessage) => {
-      handleServerMessage(msg, commandExecutor, logger, powerScheduler, startSerialBridge, stopSerialBridge);
+      handleServerMessage(msg, commandExecutor, logger, powerScheduler, startSerialBridge, stopSerialBridge, multiScreenKiosk, getIdentity);
     },
   });
 
@@ -146,6 +148,15 @@ async function main(): Promise<void> {
   const kioskConfig: KioskConfig = { ...baseKioskConfig, defaultUrl: kioskUrl.toString() };
   const kioskManager = new KioskManager(kioskConfig, logger);
   registerKioskCommands(commandExecutor.register.bind(commandExecutor), kioskManager, logger);
+
+  // Multi-screen kiosk manager — handles multiple Chrome instances on multi-display devices
+  const multiScreenKiosk = new MultiScreenKioskManager(kioskConfig, logger);
+  const getIdentity = () => identity!;
+  registerMultiScreenKioskCommands(commandExecutor.register.bind(commandExecutor), multiScreenKiosk, getIdentity, logger);
+
+  // Detect physical screens and report to server
+  const detectedScreens = detectScreens(logger);
+  multiScreenKiosk.setDetectedScreens(detectedScreens);
 
   // Create Watchdog (Phase 20)
   const watchdog = new Watchdog(
@@ -289,7 +300,19 @@ async function main(): Promise<void> {
     if (wsClient.isConnected()) {
       wsClient.send({
         type: 'agent:register',
-        payload: { agentVersion: getAgentVersion() },
+        payload: {
+          agentVersion: getAgentVersion(),
+          screens: detectedScreens.map(s => ({
+            hardwareId: s.hardwareId,
+            name: s.name,
+            index: s.index,
+            width: s.width,
+            height: s.height,
+            x: s.x,
+            y: s.y,
+            primary: s.primary,
+          })),
+        },
         timestamp: Date.now(),
       });
       clearInterval(registerInterval);
@@ -311,7 +334,7 @@ async function main(): Promise<void> {
         }
       }
 
-      // Fetch device config and auto-start serial bridge if com_port is configured
+      // Fetch device config and auto-start serial bridge + multi-screen if configured
       fetchDeviceConfig(config.serverUrl, identity, logger).then((deviceCfg) => {
         if (deviceCfg && deviceCfg.comPort) {
           const comPort = deviceCfg.comPort;
@@ -322,6 +345,14 @@ async function main(): Promise<void> {
           startSerialBridge(comPort, controllerId, bridgeBaud);
         } else {
           logger.info('[SERIAL] No com_port configured on this device — serial bridge not started');
+        }
+
+        // Auto-apply screenMap if present in device config
+        if (deviceCfg && deviceCfg.screenMap && deviceCfg.screenMap.length > 0) {
+          logger.info(`[MultiKiosk] Found screenMap in device config: ${deviceCfg.screenMap.length} mapping(s)`);
+          multiScreenKiosk.applyScreenMap(deviceCfg.screenMap, identity).catch((err) => {
+            logger.error('[MultiKiosk] Failed to apply screenMap from config:', err);
+          });
         }
       }).catch((err) => {
         logger.warn('[SERIAL] Could not fetch device config:', err);
@@ -356,6 +387,7 @@ async function main(): Promise<void> {
     if (serialBridge) serialBridge.stop();
     watchdog.stop();
     healthMonitor.stop();
+    multiScreenKiosk.destroy();
     kioskManager.destroy();
     wsClient.close();
     staticServer.stop();
@@ -385,7 +417,9 @@ function handleServerMessage(
   logger: Logger,
   powerScheduler?: PowerScheduler,
   startSerialBridge?: (comPort: string, controllerId: string, baudRate?: number) => void,
-  stopSerialBridge?: () => void
+  stopSerialBridge?: () => void,
+  multiScreenKiosk?: MultiScreenKioskManager,
+  getIdentity?: () => Identity
 ): void {
   switch (msg.type) {
     case 'connected':
@@ -413,6 +447,27 @@ function handleServerMessage(
           logger.info('[SERIAL] Admin cleared com_port — stopping serial bridge');
           stopSerialBridge();
         }
+
+        // Admin pushed updated screenMap via device config save
+        const screenMap = msg.payload.screenMap as ScreenMapping[] | undefined;
+        if (screenMap && Array.isArray(screenMap) && multiScreenKiosk && getIdentity) {
+          logger.info(`[MultiKiosk] Received screenMap update: ${screenMap.length} mapping(s)`);
+          multiScreenKiosk.applyScreenMap(screenMap, getIdentity()).catch((err) => {
+            logger.error('[MultiKiosk] Failed to apply screenMap:', err);
+          });
+        }
+      }
+      break;
+    case 'agent:screenMap':
+      // Direct screenMap push from server (alternative to embedding in agent:config)
+      if (msg.payload && multiScreenKiosk && getIdentity) {
+        const screenMap = msg.payload.screenMap as ScreenMapping[] | undefined;
+        if (screenMap && Array.isArray(screenMap)) {
+          logger.info(`[MultiKiosk] Received agent:screenMap: ${screenMap.length} mapping(s)`);
+          multiScreenKiosk.applyScreenMap(screenMap, getIdentity()).catch((err) => {
+            logger.error('[MultiKiosk] Failed to apply screenMap:', err);
+          });
+        }
       }
       break;
     case 'agent:power-schedule':
@@ -435,7 +490,7 @@ async function fetchDeviceConfig(
   serverUrl: string,
   identity: Identity,
   logger: Logger
-): Promise<{ comPort: string; controllerId: string; baudRate: number } | null> {
+): Promise<{ comPort: string; controllerId: string; baudRate: number; screenMap: ScreenMapping[] } | null> {
   try {
     const url = `${serverUrl}/api/devices/${identity.deviceId}/config`;
     const res = await fetch(url, {
@@ -452,13 +507,15 @@ async function fetchDeviceConfig(
     const appConfig = (assignedApp?.config as Record<string, unknown>) || {};
 
     const comPort = (device?.com_port as string) || '';
-    if (!comPort) return null;
 
     // controllerId comes from app config (MQTT topic identity), defaults to com_port
     const controllerId = (appConfig.controllerId as string) || comPort;
     const baudRate = (device?.baud_rate as number) || 115200;
 
-    return { comPort, controllerId, baudRate };
+    // Screen map from device config (set by admin)
+    const screenMap = (device?.screenMap as ScreenMapping[]) || [];
+
+    return { comPort, controllerId, baudRate, screenMap };
   } catch (err) {
     logger.debug('Failed to fetch device config:', err);
     return null;

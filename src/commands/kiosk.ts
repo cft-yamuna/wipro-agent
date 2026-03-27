@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { CommandHandler, KioskStatus } from '../lib/types.js';
 import type { KioskManager } from '../services/kiosk.js';
+import type { MultiScreenKioskManager } from '../services/multiScreenKiosk.js';
 import type { Logger } from '../lib/logger.js';
 
 // --- Zod Schemas ---
@@ -70,5 +71,43 @@ export function registerKioskCommands(
   register('kiosk:status', async () => {
     const status: KioskStatus = kioskManager.getStatus();
     return status as unknown as Record<string, unknown>;
+  });
+}
+
+/**
+ * Register multi-screen kiosk commands.
+ * These allow the server to manage individual screens on multi-display devices.
+ */
+export function registerMultiScreenKioskCommands(
+  register: (command: string, handler: CommandHandler) => void,
+  multiKiosk: MultiScreenKioskManager,
+  getIdentity: () => { deviceId: string; apiKey: string },
+  logger: Logger
+): void {
+  register('kiosk:multi:status', async () => {
+    const status = multiKiosk.getStatus();
+    return status as unknown as Record<string, unknown>;
+  });
+
+  register('kiosk:multi:navigate', async (args) => {
+    const hardwareId = args?.hardwareId as string;
+    const url = args?.url as string;
+    if (!hardwareId) throw new Error('kiosk:multi:navigate requires args.hardwareId');
+    if (!url) throw new Error('kiosk:multi:navigate requires args.url');
+    logger.info(`kiosk:multi:navigate ${hardwareId} → ${url}`);
+    await multiKiosk.navigateScreen(hardwareId, url, getIdentity());
+    return { navigated: true, hardwareId, url };
+  });
+
+  register('kiosk:multi:restart', async () => {
+    logger.info('kiosk:multi:restart');
+    const status = await multiKiosk.restartAll(getIdentity());
+    return status as unknown as Record<string, unknown>;
+  });
+
+  register('kiosk:multi:kill', async () => {
+    logger.info('kiosk:multi:kill');
+    await multiKiosk.killAll();
+    return { killed: true };
   });
 }
