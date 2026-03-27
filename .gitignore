@@ -1,5 +1,4 @@
 # ── Device-specific files (generated per installation, NEVER commit) ──
-agent.config.json
 .lightman-identity.json
 
 # ── Build output ──

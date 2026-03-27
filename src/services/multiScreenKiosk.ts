@@ -1,4 +1,4 @@
-import { spawn, execSync } from 'child_process';
+import { spawn } from 'child_process';
 import type { ChildProcess } from 'child_process';
 import type { KioskConfig, ScreenMapping, MultiScreenKioskStatus, SingleScreenStatus } from '../lib/types.js';
 import type { DetectedScreen } from '../lib/screens.js';
@@ -54,15 +54,19 @@ export class MultiScreenKioskManager {
     }
 
     // Launch or relaunch for each mapping
-    for (const mapping of screenMap) {
-      const screen = this.detectedScreens.find(s => s.hardwareId === mapping.hardwareId);
+    for (let idx = 0; idx < screenMap.length; idx++) {
+      const mapping = screenMap[idx];
+      // Match by display number: admin saves "1","2","3" — agent detects "\\.\DISPLAY1" etc.
+      const screen = this.findScreen(mapping.hardwareId);
       if (!screen) {
         this.logger.warn(`[MultiKiosk] Screen ${mapping.hardwareId} not detected, skipping`);
         continue;
       }
 
-      // Inject device credentials into URL
-      const url = this.buildUrl(mapping.url, identity);
+      // Use the mapping's URL if provided, otherwise use the default kiosk URL
+      // The screenIndex is the mapping's position (idx) in the array
+      const basePath = mapping.url || this.config.defaultUrl;
+      const url = this.buildUrl(basePath, identity, idx);
 
       const existing = this.instances.get(mapping.hardwareId);
       if (existing && existing.url === url && existing.process && existing.process.exitCode === null) {
@@ -149,19 +153,24 @@ export class MultiScreenKioskManager {
     this.instances.set(hardwareId, instance);
   }
 
-  /** Build the full URL with device credentials */
-  private buildUrl(path: string, identity: { deviceId: string; apiKey: string }): string {
+  /** Build the full URL with device credentials and screenIndex */
+  private buildUrl(path: string, identity: { deviceId: string; apiKey: string }, screenIndex?: number): string {
     // If path is already a full URL, use it; otherwise prepend the local static server
     let fullUrl: string;
     if (path.startsWith('http://') || path.startsWith('https://')) {
       fullUrl = path;
     } else {
-      fullUrl = `http://localhost:3403${path.startsWith('/') ? '' : '/'}${path}`;
+      // Ensure display URL format: /display/{slug}
+      const displayPath = path.startsWith('/display/') ? path : `/display/${path.replace(/^\//, '')}`;
+      fullUrl = `http://localhost:3403${displayPath}`;
     }
 
     const url = new URL(fullUrl);
     url.searchParams.set('deviceId', identity.deviceId);
     url.searchParams.set('apiKey', identity.apiKey);
+    if (screenIndex !== undefined) {
+      url.searchParams.set('screenIndex', String(screenIndex));
+    }
     return url.toString();
   }
 
@@ -189,6 +198,20 @@ export class MultiScreenKioskManager {
       }
       instance.process = null;
     }
+  }
+
+  /** Find a detected screen by display number or full hardware ID */
+  private findScreen(id: string): DetectedScreen | undefined {
+    // Direct match (full hardware ID like "\\.\DISPLAY1")
+    const direct = this.detectedScreens.find(s => s.hardwareId === id);
+    if (direct) return direct;
+
+    // Match by display number ("1" → "\\.\DISPLAY1", "2" → "\\.\DISPLAY2")
+    if (/^\d+$/.test(id)) {
+      return this.detectedScreens.find(s => s.hardwareId.endsWith('DISPLAY' + id));
+    }
+
+    return undefined;
   }
 
   /** Kill all Chrome instances */

@@ -40,29 +40,29 @@ export function detectScreens(logger: Logger): DetectedScreen[] {
 
 function detectScreensWindows(logger: Logger): DetectedScreen[] {
   try {
-    // PowerShell one-liner: get all monitors with position info via Win32_DesktopMonitor + Screen class
-    const psScript = `
-      Add-Type -AssemblyName System.Windows.Forms
-      $screens = [System.Windows.Forms.Screen]::AllScreens
-      $result = @()
-      $i = 0
-      foreach ($s in $screens) {
-        $result += [PSCustomObject]@{
-          hardwareId = $s.DeviceName
-          name = $s.DeviceName
-          index = $i
-          x = $s.Bounds.X
-          y = $s.Bounds.Y
-          width = $s.Bounds.Width
-          height = $s.Bounds.Height
-          primary = $s.Primary
-        }
-        $i++
-      }
-      $result | ConvertTo-Json -Compress
-    `.trim().replace(/\n/g, ' ');
+    // PowerShell script — use regular string to avoid JS template literal eating $variables
+    const psScript = [
+      'Add-Type -AssemblyName System.Windows.Forms;',
+      '$screens = [System.Windows.Forms.Screen]::AllScreens;',
+      '$result = @();',
+      '$i = 0;',
+      'foreach ($s in $screens) {',
+      '  $result += [PSCustomObject]@{',
+      '    hardwareId = $s.DeviceName;',
+      '    name = $s.DeviceName;',
+      '    index = $i;',
+      '    x = $s.Bounds.X;',
+      '    y = $s.Bounds.Y;',
+      '    width = $s.Bounds.Width;',
+      '    height = $s.Bounds.Height;',
+      '    primary = $s.Primary',
+      '  };',
+      '  $i++',
+      '};',
+      '$result | ConvertTo-Json -Compress',
+    ].join(' ');
 
-    const result = execSync(`powershell -NoProfile -Command "${psScript}"`, {
+    const result = execSync('powershell -NoProfile -Command "' + psScript + '"', {
       encoding: 'utf-8',
       timeout: 10_000,
       stdio: ['pipe', 'pipe', 'ignore'],

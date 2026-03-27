@@ -108,7 +108,14 @@ export class StaticServer {
       return;
     }
 
-    // Serve static display files
+    // Proxy /display/* to the server first (always get latest build).
+    // Only fall back to local files if server is unreachable.
+    if (path.startsWith('/display')) {
+      this.proxyWithFallback(req, res);
+      return;
+    }
+
+    // Serve static files for non-display paths
     this.serveStatic(req, res);
   }
 
@@ -133,6 +140,41 @@ export class StaticServer {
         res.writeHead(502);
         res.end('Bad Gateway');
       }
+    });
+
+    req.pipe(proxy);
+  }
+
+  /**
+   * Try to proxy the request to the real server (latest display build).
+   * If the server is unreachable, fall back to local static files.
+   */
+  private proxyWithFallback(req: IncomingMessage, res: ServerResponse): void {
+    const target = new URL(this.serverUrl);
+    const options = {
+      hostname: target.hostname,
+      port: target.port || 80,
+      path: req.url,
+      method: req.method,
+      headers: { ...req.headers, host: target.host },
+      timeout: 3000,
+    };
+
+    const proxy = httpRequest(options, (upstreamRes) => {
+      res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
+      upstreamRes.pipe(res);
+    });
+
+    proxy.on('error', () => {
+      // Server unreachable — fall back to local files
+      this.logger.debug(`Server unreachable for ${req.url}, serving from local files`);
+      this.serveStatic(req, res);
+    });
+
+    proxy.on('timeout', () => {
+      proxy.destroy();
+      this.logger.debug(`Server timeout for ${req.url}, serving from local files`);
+      this.serveStatic(req, res);
     });
 
     req.pipe(proxy);
