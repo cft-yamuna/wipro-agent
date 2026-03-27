@@ -151,6 +151,14 @@ export class StaticServer {
    */
   private proxyWithFallback(req: IncomingMessage, res: ServerResponse): void {
     const target = new URL(this.serverUrl);
+    let fell = false;
+    const fallback = () => {
+      if (fell || res.headersSent) return;
+      fell = true;
+      this.logger.debug(`Proxy failed for ${req.url}, serving from local files`);
+      this.serveStatic(req, res);
+    };
+
     const options = {
       hostname: target.hostname,
       port: target.port || 80,
@@ -165,17 +173,8 @@ export class StaticServer {
       upstreamRes.pipe(res);
     });
 
-    proxy.on('error', () => {
-      // Server unreachable — fall back to local files
-      this.logger.debug(`Server unreachable for ${req.url}, serving from local files`);
-      this.serveStatic(req, res);
-    });
-
-    proxy.on('timeout', () => {
-      proxy.destroy();
-      this.logger.debug(`Server timeout for ${req.url}, serving from local files`);
-      this.serveStatic(req, res);
-    });
+    proxy.on('error', fallback);
+    proxy.on('timeout', () => { proxy.destroy(); fallback(); });
 
     req.pipe(proxy);
   }

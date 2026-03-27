@@ -49,6 +49,7 @@ export class Watchdog {
   private serverUrl: string;
   private identity: { deviceId: string; apiKey: string };
   private lastChromeCacheCleanup = 0;
+  private _multiScreenActive = false;
 
   constructor(
     kioskManager: KioskManager,
@@ -68,6 +69,11 @@ export class Watchdog {
     this.identity = identity;
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.shellMode = shellMode ?? false;
+  }
+
+  /** When multi-screen kiosk is active, watchdog should NOT restart the single kiosk */
+  setMultiScreenActive(active: boolean): void {
+    this._multiScreenActive = active;
   }
 
   start(): void {
@@ -185,7 +191,11 @@ export class Watchdog {
     }
 
     // Rule: Kiosk crash recovery
+    // Skip if multi-screen kiosk is active (it manages its own Chrome instances)
     // In shell mode, the shell BAT handles Chrome restarts — we only monitor and report
+    if (this._multiScreenActive) {
+      // Multi-screen mode — watchdog does not touch Chrome
+    } else {
     const kioskStatus = this.kioskManager.getStatus();
     if (!kioskStatus.running && !kioskStatus.crashLoopDetected) {
       if (this.shellMode) {
@@ -209,6 +219,7 @@ export class Watchdog {
         this.sendCrashReport('kiosk', null, null).catch(() => {});
       }
     }
+    } // end else (not multi-screen)
 
     // Rule: High memory — restart agent (systemd will restart)
     const heapMb = process.memoryUsage().heapUsed / (1024 * 1024);

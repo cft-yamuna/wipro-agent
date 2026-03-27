@@ -6,7 +6,10 @@ import type { Logger } from '../lib/logger.js';
 
 interface ScreenInstance {
   hardwareId: string;
-  url: string;
+  mappingId: string;   // original hardwareId from admin ("1","2","3")
+  mappingUrl: string;  // original URL from mapping (before buildUrl)
+  screenIndex: number; // position in the screenMap array
+  url: string;         // fully built URL with credentials
   screen: DetectedScreen;
   process: ChildProcess | null;
   startedAt: number | null;
@@ -23,6 +26,7 @@ export class MultiScreenKioskManager {
   private instances: Map<string, ScreenInstance> = new Map();
   private detectedScreens: DetectedScreen[] = [];
   private pollTimer: NodeJS.Timeout | null = null;
+  private applying = false;
 
   constructor(config: KioskConfig, logger: Logger) {
     this.config = config;
@@ -41,6 +45,20 @@ export class MultiScreenKioskManager {
    * and relaunches those whose URL changed.
    */
   async applyScreenMap(screenMap: ScreenMapping[], identity: { deviceId: string; apiKey: string }): Promise<MultiScreenKioskStatus> {
+    // Guard against concurrent calls
+    if (this.applying) {
+      this.logger.warn('[MultiKiosk] applyScreenMap already in progress, skipping');
+      return this.getStatus();
+    }
+    this.applying = true;
+    try {
+      return await this._applyScreenMap(screenMap, identity);
+    } finally {
+      this.applying = false;
+    }
+  }
+
+  private async _applyScreenMap(screenMap: ScreenMapping[], identity: { deviceId: string; apiKey: string }): Promise<MultiScreenKioskStatus> {
     this.logger.info(`[MultiKiosk] Applying screen map: ${screenMap.length} mapping(s)`);
 
     // Find which hardwareIds are no longer mapped — kill those
@@ -81,7 +99,7 @@ export class MultiScreenKioskManager {
       }
 
       // Launch new Chrome on this screen
-      await this.launchOnScreen(mapping.hardwareId, url, screen, identity);
+      await this.launchOnScreen(screen.hardwareId, url, screen, identity, mapping.hardwareId, mapping.url || '', idx);
     }
 
     this.startPoll();
@@ -93,13 +111,17 @@ export class MultiScreenKioskManager {
     hardwareId: string,
     url: string,
     screen: DetectedScreen,
-    identity: { deviceId: string; apiKey: string }
+    identity: { deviceId: string; apiKey: string },
+    mappingId: string = hardwareId,
+    mappingUrl: string = '',
+    screenIndex: number = 0
   ): Promise<void> {
     // Each screen gets its own user-data-dir to avoid profile lock conflicts
+    const sep = process.platform === 'win32' ? '\\' : '/';
     const basePath = process.platform === 'win32'
       ? 'C:\\ProgramData\\Lightman'
       : '/tmp/lightman';
-    const userDataDir = `${basePath}\\chrome-kiosk-screen-${screen.index}`;
+    const userDataDir = `${basePath}${sep}chrome-kiosk-screen-${screen.index}`;
 
     const args = [
       '--kiosk',
@@ -125,6 +147,9 @@ export class MultiScreenKioskManager {
 
     const instance: ScreenInstance = {
       hardwareId,
+      mappingId,
+      mappingUrl,
+      screenIndex,
       url,
       screen,
       process: proc,
@@ -133,13 +158,15 @@ export class MultiScreenKioskManager {
     };
 
     proc.on('exit', (code) => {
+      // Only auto-restart if this instance is still current (not replaced by a newer applyScreenMap)
+      const current = this.instances.get(hardwareId);
+      if (!current || current.process !== proc) return;
       this.logger.warn(`[MultiKiosk] Chrome on ${hardwareId} exited with code ${code}`);
-      // Auto-restart after 3s
       setTimeout(() => {
-        const current = this.instances.get(hardwareId);
-        if (current && current.url) {
+        const stillCurrent = this.instances.get(hardwareId);
+        if (stillCurrent && stillCurrent === instance) {
           this.logger.info(`[MultiKiosk] Auto-restarting Chrome on ${hardwareId}`);
-          this.launchOnScreen(hardwareId, current.url, screen, identity).catch(err => {
+          this.launchOnScreen(hardwareId, url, screen, identity, mappingId, mappingUrl, screenIndex).catch(err => {
             this.logger.error(`[MultiKiosk] Failed to restart Chrome on ${hardwareId}:`, err);
           });
         }
@@ -206,9 +233,13 @@ export class MultiScreenKioskManager {
     const direct = this.detectedScreens.find(s => s.hardwareId === id);
     if (direct) return direct;
 
-    // Match by display number ("1" → "\\.\DISPLAY1", "2" → "\\.\DISPLAY2")
+    // Match by display number ("1" → "\\.\DISPLAY1") — anchored to avoid "1" matching "DISPLAY11"
     if (/^\d+$/.test(id)) {
-      return this.detectedScreens.find(s => s.hardwareId.endsWith('DISPLAY' + id));
+      const suffix = 'DISPLAY' + id;
+      return this.detectedScreens.find(s => {
+        const name = s.hardwareId.toUpperCase();
+        return name.endsWith(suffix) && (name.length === suffix.length || name[name.length - suffix.length - 1] === '\\');
+      });
     }
 
     return undefined;
@@ -227,7 +258,7 @@ export class MultiScreenKioskManager {
     this.logger.info('[MultiKiosk] Restarting all Chrome instances');
     const mappings: ScreenMapping[] = [];
     for (const [, instance] of this.instances) {
-      mappings.push({ hardwareId: instance.hardwareId, url: instance.url });
+      mappings.push({ hardwareId: instance.mappingId, url: instance.mappingUrl });
     }
     await this.killAll();
     await new Promise(r => setTimeout(r, 2_000));
