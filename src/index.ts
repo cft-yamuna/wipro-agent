@@ -107,7 +107,7 @@ async function main(): Promise<void> {
     identity,
     logger,
     onMessage: (msg: WsMessage) => {
-      handleServerMessage(msg, commandExecutor, logger, powerScheduler, startSerialBridge, stopSerialBridge, multiScreenKiosk, getIdentity);
+      handleServerMessage(msg, commandExecutor, logger, powerScheduler, startSerialBridge, stopSerialBridge, multiScreenKiosk, getIdentity, kioskManager);
     },
   });
 
@@ -426,7 +426,8 @@ function handleServerMessage(
   startSerialBridge?: (comPort: string, controllerId: string, baudRate?: number) => void,
   stopSerialBridge?: () => void,
   multiScreenKiosk?: MultiScreenKioskManager,
-  getIdentity?: () => Identity
+  getIdentity?: () => Identity,
+  kioskManager?: KioskManager
 ): void {
   switch (msg.type) {
     case 'connected':
@@ -457,8 +458,10 @@ function handleServerMessage(
 
         // Admin pushed updated screenMap via device config save
         const screenMap = msg.payload.screenMap as ScreenMapping[] | undefined;
-        if (screenMap && Array.isArray(screenMap) && multiScreenKiosk && getIdentity) {
-          logger.info(`[MultiKiosk] Received screenMap update: ${screenMap.length} mapping(s)`);
+        if (screenMap && Array.isArray(screenMap) && screenMap.length > 0 && multiScreenKiosk && getIdentity) {
+          logger.info(`[MultiKiosk] Received screenMap update: ${screenMap.length} mapping(s) — killing single kiosk`);
+          // Kill single kiosk before applying multi-screen
+          if (kioskManager) kioskManager.kill().catch(() => {});
           multiScreenKiosk.applyScreenMap(screenMap, getIdentity()).catch((err) => {
             logger.error('[MultiKiosk] Failed to apply screenMap:', err);
           });
@@ -469,8 +472,10 @@ function handleServerMessage(
       // Direct screenMap push from server (alternative to embedding in agent:config)
       if (msg.payload && multiScreenKiosk && getIdentity) {
         const screenMap = msg.payload.screenMap as ScreenMapping[] | undefined;
-        if (screenMap && Array.isArray(screenMap)) {
-          logger.info(`[MultiKiosk] Received agent:screenMap: ${screenMap.length} mapping(s)`);
+        if (screenMap && Array.isArray(screenMap) && screenMap.length > 0) {
+          logger.info(`[MultiKiosk] Received agent:screenMap: ${screenMap.length} mapping(s) — killing single kiosk`);
+          // Kill single kiosk before applying multi-screen
+          if (kioskManager) kioskManager.kill().catch(() => {});
           multiScreenKiosk.applyScreenMap(screenMap, getIdentity()).catch((err) => {
             logger.error('[MultiKiosk] Failed to apply screenMap:', err);
           });
