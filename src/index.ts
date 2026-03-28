@@ -26,6 +26,7 @@ import { ServiceLauncher } from './services/serviceLauncher.js';
 import { StaticServer } from './services/staticServer.js';
 import { PowerScheduler } from './services/powerScheduler.js';
 import { SerialBridge } from './services/serialBridge.js';
+import { OscBridge } from './services/oscBridge.js';
 import { LocalEventServer } from './services/localEvents.js';
 import type { WsMessage, KioskConfig, PowerScheduleConfig, Identity, ScreenMapping } from './lib/types.js';
 
@@ -107,7 +108,7 @@ async function main(): Promise<void> {
     identity,
     logger,
     onMessage: (msg: WsMessage) => {
-      handleServerMessage(msg, commandExecutor, logger, powerScheduler, startSerialBridge, stopSerialBridge, multiScreenKiosk, getIdentity, kioskManager, watchdog);
+      handleServerMessage(msg, commandExecutor, logger, powerScheduler, startSerialBridge, stopSerialBridge, startOscBridge, stopOscBridge, multiScreenKiosk, getIdentity, kioskManager, watchdog);
     },
   });
 
@@ -191,6 +192,31 @@ async function main(): Promise<void> {
   const localEventServer = new LocalEventServer(config.localEventsPort || 3402, logger);
   localEventServer.start();
 
+  // OSC bridge — listens on UDP for OSC messages and forwards triggers to display
+  let oscBridge: OscBridge | null = null;
+
+  const startOscBridge = (oscPort: number, oscAddress: string, oscHost?: string) => {
+    if (oscBridge) {
+      logger.info('[OSC] Stopping existing bridge before restart');
+      oscBridge.stop();
+      oscBridge = null;
+    }
+    logger.info(`[OSC] Starting bridge — UDP ${oscHost || '0.0.0.0'}:${oscPort} address: ${oscAddress}`);
+    oscBridge = new OscBridge({
+      wsClient,
+      logger,
+      port: oscPort,
+      host: oscHost || '0.0.0.0',
+      address: oscAddress,
+      onEvent: (event) => localEventServer.broadcast({ type: 'hardware:event', payload: event }),
+    });
+    oscBridge.start();
+  };
+
+  const stopOscBridge = () => {
+    if (oscBridge) { oscBridge.stop(); oscBridge = null; }
+  };
+
   // Serial bridge — reads COM port chars (* → pickup, # → hangup) and forwards to server
   let serialBridge: SerialBridge | null = null;
 
@@ -241,6 +267,30 @@ async function main(): Promise<void> {
 
   commandExecutor.register('serial:bridge-status', async () => {
     return { running: serialBridge?.isRunning() || false };
+  });
+
+  // OSC bridge commands
+  commandExecutor.register('osc:bridge-start', async (args) => {
+    const oscPort = args?.oscPort as number || args?.port as number;
+    const oscAddress = args?.oscAddress as string || args?.address as string;
+    const oscHost = args?.oscHost as string;
+    if (!oscPort) throw new Error('oscPort is required');
+    if (!oscAddress) throw new Error('oscAddress is required');
+    startOscBridge(oscPort, oscAddress, oscHost);
+    return { started: true, oscPort, oscAddress };
+  });
+
+  commandExecutor.register('osc:bridge-stop', async () => {
+    if (oscBridge) {
+      oscBridge.stop();
+      oscBridge = null;
+      return { stopped: true };
+    }
+    return { stopped: false, message: 'No OSC bridge running' };
+  });
+
+  commandExecutor.register('osc:bridge-status', async () => {
+    return { running: oscBridge?.isRunning() || false };
   });
 
   // Create PowerScheduler for local cron-based shutdown + server-pushed power commands
@@ -331,6 +381,14 @@ async function main(): Promise<void> {
           logger.info('[SERIAL] No com_port configured on this device — serial bridge not started');
         }
 
+        // OSC bridge — auto-start if app config has inputSource === 'osc'
+        if (deviceCfg && deviceCfg.oscPort && deviceCfg.oscAddress) {
+          logger.info(`[OSC] Config found: port=${deviceCfg.oscPort} address=${deviceCfg.oscAddress}`);
+          startOscBridge(deviceCfg.oscPort, deviceCfg.oscAddress, deviceCfg.oscHost);
+        } else {
+          logger.info('[OSC] No OSC config on this device — OSC bridge not started');
+        }
+
         // Multi-screen: if screenMap exists, use MultiScreenKioskManager — do NOT launch single kiosk
         if (deviceCfg && deviceCfg.screenMap && deviceCfg.screenMap.length > 0) {
           logger.info(`[MultiKiosk] Found screenMap in device config: ${deviceCfg.screenMap.length} mapping(s) — skipping single kiosk`);
@@ -393,6 +451,7 @@ async function main(): Promise<void> {
     logForwarder.stop();
     powerScheduler.stop();
     if (serialBridge) serialBridge.stop();
+    if (oscBridge) oscBridge.stop();
     watchdog.stop();
     healthMonitor.stop();
     multiScreenKiosk.destroy();
@@ -426,6 +485,8 @@ function handleServerMessage(
   powerScheduler?: PowerScheduler,
   startSerialBridge?: (comPort: string, controllerId: string, baudRate?: number) => void,
   stopSerialBridge?: () => void,
+  startOscBridgeFn?: (oscPort: number, oscAddress: string, oscHost?: string) => void,
+  stopOscBridgeFn?: () => void,
   multiScreenKiosk?: MultiScreenKioskManager,
   getIdentity?: () => Identity,
   kioskManager?: KioskManager,
@@ -456,6 +517,19 @@ function handleServerMessage(
         } else if (comPort === '' && stopSerialBridge) {
           logger.info('[SERIAL] Admin cleared com_port — stopping serial bridge');
           stopSerialBridge();
+        }
+
+        // Admin pushed OSC config via app config save
+        const oscPort = msg.payload.oscPort as number | undefined;
+        const oscAddress = msg.payload.oscAddress as string | undefined;
+        const inputSource = msg.payload.inputSource as string | undefined;
+        if (inputSource === 'osc' && oscPort && oscAddress && startOscBridgeFn) {
+          const oscHost = (msg.payload.oscHost as string) || '0.0.0.0';
+          logger.info(`[OSC] Admin updated OSC config → port=${oscPort} address=${oscAddress} — restarting bridge...`);
+          startOscBridgeFn(oscPort, oscAddress, oscHost);
+        } else if (inputSource === 'com' && stopOscBridgeFn) {
+          logger.info('[OSC] Admin switched to COM input — stopping OSC bridge');
+          stopOscBridgeFn();
         }
 
         // Admin pushed updated screenMap via device config save
@@ -517,7 +591,15 @@ async function fetchDeviceConfig(
   serverUrl: string,
   identity: Identity,
   logger: Logger
-): Promise<{ comPort: string; controllerId: string; baudRate: number; screenMap: ScreenMapping[] } | null> {
+): Promise<{
+  comPort: string;
+  controllerId: string;
+  baudRate: number;
+  screenMap: ScreenMapping[];
+  oscPort: number;
+  oscAddress: string;
+  oscHost: string;
+} | null> {
   try {
     const url = `${serverUrl}/api/devices/${identity.deviceId}/config`;
     const res = await fetch(url, {
@@ -542,7 +624,13 @@ async function fetchDeviceConfig(
     // Screen map from device config (set by admin)
     const screenMap = (device?.screenMap as ScreenMapping[]) || [];
 
-    return { comPort, controllerId, baudRate, screenMap };
+    // OSC settings from app config (custom07-osc template)
+    const inputSource = appConfig.inputSource as string;
+    const oscPort = inputSource === 'osc' ? ((appConfig.oscPort as number) || 0) : 0;
+    const oscAddress = inputSource === 'osc' ? ((appConfig.oscAddress as string) || '') : '';
+    const oscHost = (appConfig.oscHost as string) || '0.0.0.0';
+
+    return { comPort, controllerId, baudRate, screenMap, oscPort, oscAddress, oscHost };
   } catch (err) {
     logger.debug('Failed to fetch device config:', err);
     return null;
