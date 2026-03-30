@@ -1,6 +1,6 @@
 {
   "name": "lightman-agent",
-  "version": "1.0.0",
+  "version": "1.0.5",
   "description": "LIGHTMAN Agent - System-level daemon for museum display machines",
   "private": false,
   "type": "module",

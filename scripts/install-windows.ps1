@@ -14,7 +14,8 @@ param(
     [Parameter(Mandatory=$true)]  [string]$Server,
     [string]$Timezone = "Asia/Kolkata",
     [string]$Username = "",
-    [switch]$ShellReplace = $false
+    [switch]$ShellReplace = $false,
+    [int]$PairingTimeoutSeconds = 900
 )
 
 $ErrorActionPreference = "Stop"
@@ -70,7 +71,20 @@ foreach ($tn in @($AgentTask, $KioskTask, $GuardianTask)) {
 
 # Kill processes
 Write-Host "[0c] Killing node.exe and Chrome..." -ForegroundColor Yellow
-Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+# IMPORTANT:
+# If install-windows.ps1 is launched from the npm CLI wrapper (node.exe),
+# killing all node.exe would terminate the installer mid-run.
+$parentPid = $null
+try {
+    $parentPid = (Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction SilentlyContinue).ParentProcessId
+} catch { }
+Get-Process -Name "node" -ErrorAction SilentlyContinue | ForEach-Object {
+    if ($parentPid -and $_.Id -eq $parentPid) {
+        Write-Host "  Keeping installer parent node.exe (PID $($_.Id))" -ForegroundColor DarkGray
+    } else {
+        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+    }
+}
 Get-Process -Name "chrome" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
 
@@ -130,6 +144,7 @@ Copy-Item "$AgentDir\package.json" "$InstallDir\package.json" -Force
 if (Test-Path "$AgentDir\package-lock.json") { Copy-Item "$AgentDir\package-lock.json" "$InstallDir\package-lock.json" -Force }
 Copy-Item "$AgentDir\agent.config.template.json" "$InstallDir\agent.config.template.json" -Force
 if (Test-Path "$AgentDir\public") { Copy-Item "$AgentDir\public" "$InstallDir\public" -Recurse -Force }
+if (Test-Path "$AgentDir\scripts") { Copy-Item "$AgentDir\scripts" "$InstallDir\scripts" -Recurse -Force }
 
 # --- 5. Install deps ---
 Write-Host "[5/19] Installing dependencies..." -ForegroundColor Yellow
@@ -289,6 +304,49 @@ for ($i = 0; $i -lt 10; $i++) {
 }
 if ($portUp) { Write-Host "  Port 3403 LISTENING" -ForegroundColor Green }
 else { Write-Host "  Port 3403 not yet up (may take a moment)" -ForegroundColor Yellow }
+
+# Wait until provisioning is complete (auto-provision or manual pairing)
+Write-Host "[11b/19] Waiting for device provisioning/pairing..." -ForegroundColor Yellow
+$identityPath = Join-Path $InstallDir ".lightman-identity.json"
+$deadline = if ($PairingTimeoutSeconds -gt 0) { (Get-Date).AddSeconds($PairingTimeoutSeconds) } else { $null }
+$paired = $false
+$lastHint = ""
+
+while (-not $paired) {
+    if (Test-Path $identityPath) {
+        try {
+            $identity = Get-Content $identityPath -Raw | ConvertFrom-Json
+            if ($identity.deviceId -and $identity.apiKey) {
+                $paired = $true
+                break
+            }
+        } catch {
+            # File may be mid-write, retry
+        }
+    }
+
+    $logPath = Join-Path $LogDir "service-stdout.log"
+    if (Test-Path $logPath) {
+        try {
+            $hint = Get-Content $logPath -Tail 40 | Where-Object {
+                $_ -match "Pairing required|Waiting for admin to approve pairing|Auto-provisioned|Pairing complete"
+            } | Select-Object -Last 1
+            if ($hint -and $hint -ne $lastHint) {
+                Write-Host "  Agent: $hint" -ForegroundColor DarkGray
+                $lastHint = $hint
+            }
+        } catch { }
+    }
+
+    if ($deadline -and (Get-Date) -ge $deadline) {
+        Write-Host "  FATAL: Pairing timed out after $PairingTimeoutSeconds seconds." -ForegroundColor Red
+        Write-Host "  Check server pairing UI, then re-run installer (or increase -PairingTimeoutSeconds)." -ForegroundColor Yellow
+        exit 1
+    }
+
+    Start-Sleep -Seconds 5
+}
+Write-Host "  Provisioning/pairing complete" -ForegroundColor Green
 
 # --- 12. Firewall ---
 Write-Host "[12/19] Configuring firewall..." -ForegroundColor Yellow

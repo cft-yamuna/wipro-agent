@@ -171,12 +171,14 @@ export class KioskManager {
 
   private async shellLaunch(targetUrl: string): Promise<KioskStatus> {
     this.currentUrl = targetUrl;
+    // Keep shell sidecar updated so shell BAT can launch with auth query params.
+    this.writeUrlSidecar(targetUrl);
 
     // Shell mode: Chrome is managed by lightman-shell.bat.
-    // Shell reads slug from agent.config.json directly.
-    // Agent NEVER kills Chrome on startup - only on explicit navigate().
+    // Shell prefers sidecar URL (if present), then falls back to slug in config.
     if (this.isChromeRunning()) {
-      this.logger.info('Shell mode: Chrome already running. Not touching it.');
+      this.logger.info('Shell mode: Chrome already running. Restarting once to apply sidecar URL.');
+      this.killAllChrome();
     } else {
       this.logger.info('Shell mode: Chrome not running. Shell BAT will launch it.');
     }

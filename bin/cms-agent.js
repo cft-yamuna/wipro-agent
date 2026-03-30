@@ -8,7 +8,7 @@ import { spawnSync } from 'child_process';
 import { createInterface } from 'readline/promises';
 import { stdin as input, stdout as output, cwd, platform, exit } from 'process';
 
-const DEFAULT_SERVER = 'http://192.168.1.181:3401';
+const DEFAULT_SERVER = 'http://192.168.1.100:3401';
 const INSTALL_CONFIG_PATH = 'C:\\Program Files\\Lightman\\Agent\\agent.config.json';
 
 function printUsage() {
@@ -22,8 +22,9 @@ Commands:
 
 Options:
   --slug <value>      Device slug (example: C-AV01)
-  --server <url>      Server URL (example: http://192.168.1.181:3401)
+  --server <url>      Server URL (example: http://192.168.1.100:3401)
   --timezone <tz>     Timezone override (default: Asia/Kolkata)
+  --pair-timeout <s>  Wait time for pairing in seconds (default: 900, 0 = no timeout)
   --no-restart        Skip reboot after successful install/update
   -h, --help          Show help
 `);
@@ -56,6 +57,9 @@ function parseArgs(argv) {
       i += 1;
     } else if (part === '--timezone') {
       args.timezone = next.trim();
+      i += 1;
+    } else if (part === '--pair-timeout') {
+      args.pairTimeout = next.trim();
       i += 1;
     }
   }
@@ -134,17 +138,20 @@ function resolveInstallScript() {
   throw new Error('install-windows.ps1 not found. Expected in package scripts/ or current folder scripts/.');
 }
 
-function installUsingPowerShell({ scriptPath, slug, server, timezone, noRestart }) {
+function installUsingPowerShell({ scriptPath, slug, server, timezone, pairingTimeoutSeconds, noRestart }) {
   console.log(`powershell -ExecutionPolicy Bypass -File scripts\\install-windows.ps1 -Slug "${slug}" -Server "${server}" -ShellReplace`);
   const args = ['-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-Slug', slug, '-Server', server, '-ShellReplace'];
   if (timezone) {
     args.push('-Timezone', timezone);
   }
+  if (Number.isInteger(pairingTimeoutSeconds) && pairingTimeoutSeconds >= 0) {
+    args.push('-PairingTimeoutSeconds', String(pairingTimeoutSeconds));
+  }
   runOrFail('powershell.exe', args);
 
   if (!noRestart) {
-    console.log('Installation completed. Rebooting in 10 seconds...');
-    runOrFail('shutdown.exe', ['/r', '/t', '10', '/c', 'CMS Agent installation complete']);
+    console.log('Installation completed. Rebooting now...');
+    runOrFail('shutdown.exe', ['/r', '/t', '0', '/c', 'CMS Agent installation complete']);
   }
 }
 
@@ -159,8 +166,9 @@ async function runInstall(opts) {
   const localConfig = safeReadJson(resolve(cwd(), 'agent.config.json')) || {};
   const installedConfig = safeReadJson(INSTALL_CONFIG_PATH) || {};
   const defaultSlug = opts.slug || localConfig.deviceSlug || installedConfig.deviceSlug || '';
-  const server = opts.server || localConfig.serverUrl || installedConfig.serverUrl || DEFAULT_SERVER;
+  const server = opts.server || DEFAULT_SERVER;
   const timezone = opts.timezone || localConfig?.powerSchedule?.timezone || installedConfig?.powerSchedule?.timezone || 'Asia/Kolkata';
+  const pairingTimeoutSeconds = Number.isFinite(Number(opts.pairTimeout)) ? Number.parseInt(String(opts.pairTimeout), 10) : 900;
   const noRestart = Boolean(opts.noRestart);
 
   console.log('Detected MAC addresses:');
@@ -178,7 +186,7 @@ async function runInstall(opts) {
   const scriptPath = resolveInstallScript();
 
   console.log(`Installing with slug=${slug}, server=${server}, shellReplace=true`);
-  installUsingPowerShell({ scriptPath, slug, server, timezone, noRestart });
+  installUsingPowerShell({ scriptPath, slug, server, timezone, pairingTimeoutSeconds, noRestart });
 }
 
 async function runUpdate(opts) {
@@ -191,8 +199,9 @@ async function runUpdate(opts) {
 
   const installedConfig = safeReadJson(INSTALL_CONFIG_PATH) || {};
   const slug = opts.slug || installedConfig.deviceSlug;
-  const server = opts.server || installedConfig.serverUrl || DEFAULT_SERVER;
+  const server = opts.server || DEFAULT_SERVER;
   const timezone = opts.timezone || installedConfig?.powerSchedule?.timezone || 'Asia/Kolkata';
+  const pairingTimeoutSeconds = Number.isFinite(Number(opts.pairTimeout)) ? Number.parseInt(String(opts.pairTimeout), 10) : 900;
   const noRestart = Boolean(opts.noRestart);
   const scriptPath = resolveInstallScript();
 
@@ -201,7 +210,7 @@ async function runUpdate(opts) {
   }
 
   console.log(`Updating with slug=${slug}, server=${server}, shellReplace=true`);
-  installUsingPowerShell({ scriptPath, slug, server, timezone, noRestart });
+  installUsingPowerShell({ scriptPath, slug, server, timezone, pairingTimeoutSeconds, noRestart });
 }
 
 async function main() {
