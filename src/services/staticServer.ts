@@ -169,7 +169,17 @@ export class StaticServer {
     };
 
     const proxy = httpRequest(options, (upstreamRes) => {
-      res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
+      const statusCode = upstreamRes.statusCode || 502;
+
+      // If upstream display route is unavailable/misconfigured,
+      // serve the local bundled display instead of surfacing server errors.
+      if (statusCode >= 400) {
+        upstreamRes.resume();
+        fallback();
+        return;
+      }
+
+      res.writeHead(statusCode, upstreamRes.headers);
       upstreamRes.pipe(res);
     });
 
