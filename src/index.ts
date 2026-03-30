@@ -142,11 +142,20 @@ async function main(): Promise<void> {
     maxCrashesInWindow: 10,
     crashWindowMs: 300_000,
   };
+  // Enforce unmuted autoplay in kiosk mode for video templates with audio tracks.
+  const normalizedExtraArgs = (baseKioskConfig.extraArgs || []).filter((arg) => arg !== '--mute-audio');
+  if (!normalizedExtraArgs.some((arg) => arg.startsWith('--autoplay-policy='))) {
+    normalizedExtraArgs.push('--autoplay-policy=no-user-gesture-required');
+  }
   // Inject credentials into the kiosk URL so Chrome auto-provisions without pairing
   const kioskUrl = new URL(baseKioskConfig.defaultUrl);
   kioskUrl.searchParams.set('deviceId', identity.deviceId);
   kioskUrl.searchParams.set('apiKey', identity.apiKey);
-  const kioskConfig: KioskConfig = { ...baseKioskConfig, defaultUrl: kioskUrl.toString() };
+  const kioskConfig: KioskConfig = {
+    ...baseKioskConfig,
+    extraArgs: normalizedExtraArgs,
+    defaultUrl: kioskUrl.toString(),
+  };
   const kioskManager = new KioskManager(kioskConfig, logger);
   registerKioskCommands(commandExecutor.register.bind(commandExecutor), kioskManager, logger);
 

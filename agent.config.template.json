@@ -13,6 +13,7 @@
       "--start-fullscreen",
       "--disable-translate",
       "--disable-extensions",
+      "--autoplay-policy=no-user-gesture-required",
       "--user-data-dir=__CHROME_DATA_DIR__"
     ],
     "pollIntervalMs": 10000,
